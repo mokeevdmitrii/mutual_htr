@@ -13,6 +13,7 @@ from diploma_code.data_loader.data_common import (
 from diploma_code.utils import (
     log_metric_wandb
 )
+import re
 
 def my_ctc_loss(log_probs, targets, input_lengths, target_lengths):
     """
@@ -61,7 +62,7 @@ def decode_ocr_probs(log_probs: torch.Tensor, char_encoder: CharEncoder):
     for b in range(log_probs.shape[1]):
         curr_best = [k.item() for k, g in itertools.groupby(best[:, b])]
         out_str = char_encoder.decode(curr_best)
-        res.append(out_str)
+        res.append(re.sub('\s+', ' ', out_str))
     return res
 
 @torch.no_grad()

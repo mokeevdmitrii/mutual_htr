@@ -42,6 +42,7 @@ class CharEncoder:
         return 0 if self._max < 0 else self._max
 
     def encode(self, text: str) -> torch.LongTensor:
+        txt = re.sub(r'\s+', ' ', text)
         return torch.LongTensor(list(map(lambda x: self._encode[x], text)))
 
     def decode(self, tnsr: tp.Sequence[int]) -> str:

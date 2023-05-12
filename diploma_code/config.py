@@ -3,18 +3,18 @@ from ml_collections import config_dict
 import os
 import torch
 
-IMAGE_HEIGHT = config_dict.FieldReference(40)
-CHUNK_SIZE = config_dict.FieldReference(320)
+IMAGE_HEIGHT = config_dict.FieldReference(64)
+IMAGE_WIDTH = config_dict.FieldReference(1024)
 
 DEFAULT_RUN_NAME = "__NAME__"
-
 
 def default_attn_ctc_model_config():
     hidden_features = config_dict.FieldReference(256)
 
     model = config_dict.ConfigDict()
-
+    
     backbone = model.backbone = config_dict.ConfigDict()
+    backbone.type = "resnet34"
     backbone.out_features = hidden_features
 
     encoder = model.encoder = config_dict.ConfigDict()
