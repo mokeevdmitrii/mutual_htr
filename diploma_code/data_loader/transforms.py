@@ -42,9 +42,9 @@ class HorizontalChunker:
         for i, chunk in enumerate(chunks):
             assert len(chunk.shape) == 3
             if i != 0:
-                chunk[:, :, :self.ctx_w] *= 0.5
+                chunks[i, :, :, :self.ctx_w] *= 0.5
             if i != N - 1:
-                chunk[:, :, -self.ctx_w:] *= 0.5
+                chunks[i, :, :, -self.ctx_w:] *= 0.5
         if chunks.dtype != dtype:
             chunks = chunks.to(dtype)
         return chunks

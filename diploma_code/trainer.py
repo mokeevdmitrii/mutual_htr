@@ -78,6 +78,10 @@ class LTRTrainer:
     @property
     def checkpoint_training_state_path(self):
         return os.path.join(self.checkpoints_folder, "train_state.pth")
+    
+    @property
+    def checkpoint_nan_model_path(self):
+        return os.path.join(self.nan_folder, 'nan_model_state.pth')
 
     @staticmethod
     def validate_mode(mode: str) -> None:
@@ -112,6 +116,16 @@ class LTRTrainer:
             'epoch': self.epoch,
             'step': self.step
         }, self.checkpoint_training_state_path)
+        
+    def save_nan_checkpoint(self):
+        if not os.path.exists(self.checkpoints_folder):
+                os.makedirs(self.checkpoints_folder)
+        torch.save({
+            'model': self.model.state_dict()
+        }, self.checkpoint_nan_model_path)
+        torch.save({
+            batch, self.checkpoint_nan_batch_path
+        })
 
     def log_metric(self, metric_name, loader_name, value):
         log_metric_wandb(metric_name, loader_name, value, self.step)
@@ -172,6 +186,9 @@ class LTRTrainer:
                     f.write(f"{name}: {batch[name]}\n")
                 f.write(f"loss: {val}\n")
                 f.write(f"inp_len: {inp_len}\n")
+            
+            self.save_nan_checkpoint()
+            
 
         if np.isnan(val) or np.isinf(val):
             # zero out huge losses
