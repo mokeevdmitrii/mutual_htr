@@ -57,6 +57,9 @@ class LTRTrainer:
 
         self.had_nan = False
         self.had_grad_nan = False
+        
+        self.device = torch.device(config.device)
+        self.model.to(self.device)
 
         if not self.evaluate:
             self.configure_train_state()
@@ -65,9 +68,6 @@ class LTRTrainer:
 
         if do_load_from_checkpoint:
             self.load_from_checkpoint()
-
-        self.device = torch.device(config.device)
-        self.model.to(self.device)
 
         self.char_encoder = make_char_encoder(config.data)
 
