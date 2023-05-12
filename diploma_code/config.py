@@ -41,6 +41,7 @@ def default_attn_ctc_model_config():
 def default_diploma_config():
 
     image_height = IMAGE_HEIGHT
+    image_width = IMAGE_WIDTH
 
     CONFIG = config_dict.ConfigDict()
 
