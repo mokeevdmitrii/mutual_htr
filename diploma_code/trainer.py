@@ -264,7 +264,7 @@ class LTRTrainer:
 
         def do_iter(batch, criterion_processor, cer_processor):
             batch = batch_to_device(batch, self.device)
-            gt_text, tgt_len = batch['gt_text'], batch['tgt_len']
+            gt_text, tgt_len = batch['gt_text'], batch['encoded_length']
 
             logits = self.model(batch['image'])
             inp_len = torch.IntTensor([logits.size(1)] * batch['encoded'].shape[0])         
