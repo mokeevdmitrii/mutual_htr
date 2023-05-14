@@ -2,7 +2,7 @@ import torch
 
 from ml_collections import ConfigDict
 
-from .model import PositionalEncoding
+from diploma_code.model_v2 import PositionalEncoding
 
 def pytorch_configure_optim_groups(model, weight_decay=0):
     """
@@ -12,19 +12,19 @@ def pytorch_configure_optim_groups(model, weight_decay=0):
     # separate out all parameters to those that will and won't experience regularizing weight decay
     decay = set()
     no_decay = set()
-    whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv2d, PositionalEncoding, torch.nn.MultiheadAttention, )
+    whitelist_weight_modules = (torch.nn.Linear, torch.nn.Conv2d, PositionalEncoding, torch.nn.MultiheadAttention, torch.nn.LSTM)
     blacklist_weight_modules = (torch.nn.BatchNorm2d, torch.nn.LayerNorm, )
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
             fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
 
-            if pn.endswith('bias'):
+            if 'bias' in pn:
                 # all biases will not be decayed
                 no_decay.add(fpn)
-            elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
+            elif 'weight' in pn and isinstance(m, whitelist_weight_modules):
                 # weights of whitelist modules will be weight decayed
                 decay.add(fpn)
-            elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
+            elif 'weight' in pn and isinstance(m, blacklist_weight_modules):
                 # weights of blacklist modules will NOT be weight decayed
                 no_decay.add(fpn)
 
@@ -76,4 +76,7 @@ def make_lr_scheduler(optimizer, scheduler_config):
                                              lr_lambda=eval(scheduler_config.constructor)(
                                                  **scheduler_config.params
                                              ))
+
+def make_lr_scheduler_torch(optimizer, scheduler_config):
+    return eval(scheduler_config.constructor)(optimizer=optimizer, **scheduler_config.params)
 

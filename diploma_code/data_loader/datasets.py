@@ -1,3 +1,5 @@
+# DEPRECATED, see ../dataset.py
+
 import os
 import torch
 import torchvision
@@ -94,20 +96,6 @@ class LongLinesLTRDataset(BaseLTRDataset):
         else:
             return d
 
-
-class MyConcatDataset(torch.utils.data.Dataset):
-    def __init__(self, datasets: tp.Sequence[torch.utils.data.Dataset]):
-        self.dataset = torch.utils.data.ConcatDataset(datasets)
-
-    def __len__(self, x):
-        return len(self.dataset)
-
-    def __getitem__(self, idx):
-        d = self.dataset[idx]
-        if isinstance(d, dict):
-            if 'idx' in d:
-                d['idx'] = idx
-        return d
 
 
 class RandomSampler:
@@ -209,6 +197,7 @@ class MergingSampler:
                     x = next(iters[iters_idx])
                     yield self.dataset_lens_begin[iters_idx] + x
                     break
+
 
 
 class TransformLTRWrapperDataset(torch.utils.data.Dataset):

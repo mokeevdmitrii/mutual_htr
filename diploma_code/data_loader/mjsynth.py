@@ -1,8 +1,21 @@
+# TODO: refactor me for training / fine-tuning
+
 import os
 
 import typing as tp
 
-from .data_common import Sample
+import torch
+
+import typing as tp
+
+
+class Sample:
+    def __init__(self, gt_text, file_path):
+        self.gt_text = gt_text
+        self.file_path = file_path
+
+    def __repr__(self):
+        return f"gt text: {self.gt_text}, filePath: {self.file_path}"
 
 
 def load_mjsynth_chars(data_path: str) -> tp.Set[str]:

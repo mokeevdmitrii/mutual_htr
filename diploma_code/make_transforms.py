@@ -1,62 +1,56 @@
-import torchvision as tv
+import albumentations as A
 
+import numpy as np
+
+from diploma_code.patched_hwb import HandWrittenBlot
 from ml_collections import ConfigDict
 
-from .data_loader.transforms import (
-    HorizontalResizeOnly, VerticalRandomMasking, HorizontalChunker, ChunkTransform, GaussianNoise, RandomHorizontalStretch, RandomChoiceN
-)
 
-def make_iam_train_augment(config: ConfigDict):
+class AlbuHandWrittenBlot(A.DualTransform):
+    def __init__(self, hw_blot, always_apply=False, p=0.5):
+        super(AlbuHandWrittenBlot, self).__init__(always_apply, p)
+        self.hw_blot = hw_blot
+        
+    def get_transform_init_args_names(self):
+        return ("hw_blot", "always_apply", "p")
 
-    transforms = tv.transforms.Compose([
-        tv.transforms.RandomInvert(),
-        HorizontalResizeOnly(config.image_height),
-        RandomChoiceN([
-            GaussianNoise(config.noise_gauss),
-            tv.transforms.GaussianBlur(kernel_size=config.gauss_kernel_size, sigma=config.gauss_sigma),
-            tv.transforms.RandomPerspective(distortion_scale=config.distortion_scale, p=1.0),
-            RandomHorizontalStretch(factor=config.stretch_factor),
-            VerticalRandomMasking(
-                int(config.image_height * config.vertical_mask_min_height_ratio),
-                int(config.image_height * config.vertical_mask_max_height_ratio),
-                config.vertical_mask_tile_prob,
-                1.0
-            ),
-        ], config.number_of_transforms)
-    ])
+    def apply(self, image, **params):
+        return self.hw_blot(image)
 
 
-    return transforms
+def make_blot_transform(blot_config: ConfigDict):
+    if not blot_config.enabled:
+        return None
+    
+    return AlbuHandWrittenBlot(HandWrittenBlot(**blot_config.params), p=blot_config.p)
+     
 
+def make_basic_albums(albums_config: ConfigDict):
+    
+    transforms_list = []
+    
+    for al_name, params_dict in albums_config.items():
+        
+        if not params_dict.enabled:
+            continue
+            
+        transforms_list.append(eval(f"A.{al_name}")(
+            **params_dict.params
+        ))
+        
+    return transforms_list
+            
+    
+def make_transforms(config: ConfigDict):
+    
+    transforms_list = []
+    
+    maybe_blot_transform = make_blot_transform(config.blot)
+    if maybe_blot_transform is not None:
+        transforms_list.append(maybe_blot_transform)
 
-def make_iam_test_augment(config: ConfigDict):
-
-    transforms = tv.transforms.Compose([
-        HorizontalResizeOnly(config.image_height),
-    ])
-
-    return transforms
-
-
-def make_mjsynth_train_augment(config: ConfigDict):
-    transforms = tv.transforms.Compose([
-        HorizontalResizeOnly(config.image_height),
-    ])
-
-    return transforms
-
-
-def make_mjsynth_test_augment(config: ConfigDict):
-    transforms = tv.transforms.Compose([
-        HorizontalResizeOnly(config.image_height),
-    ])
-
-    return transforms
-
-
-def make_chunker(config: ConfigDict):
-    return HorizontalChunker(config.input_height, config.chunk_size)
-
-
-def make_final_augment(data_config):
-    return ChunkTransform(make_chunker(data_config))
+    transforms_list.extend(make_basic_albums(config.basic_albums))
+    if not transforms_list:
+        return None
+    return A.Compose(transforms_list, p=1.0)
+    

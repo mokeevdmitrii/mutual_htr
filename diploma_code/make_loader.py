@@ -1,83 +1,103 @@
 import torch
+import torch.nn
 
-import typing as tp
+import os
+import pandas as pd
 
-from .data_loader.data_common import CharEncoder
-from .data_loader.datasets import (
-    BaseLTRDataset, LongLinesLTRDataset, MyConcatDataset,
-    MergingSampler, TransformLTRWrapperDataset
-)
-from .data_loader.iam import load_iam_data_dict, make_iam_split
-from .data_loader.mjsynth import load_mjsynth_chars, load_mjsynth_samples
-from .data_loader.loader import stacking_collate_fn
+from torch.utils.data import Dataset, DataLoader, SequentialSampler, RandomSampler
 
-from .make_transforms import (
-    make_iam_train_augment, make_mjsynth_train_augment, make_iam_test_augment, make_final_augment
+import diploma_code
+
+from diploma_code.dataset import (
+    BaseLTRDataset, LongLinesLTRDataset
 )
 
+from diploma_code.char_encoder import CharEncoder
+
+from diploma_code.make_transforms import make_transforms
+
+from diploma_code.utils import (
+    dict_collate_fn
+)
+
+from ml_collections import ConfigDict
 
 
-def make_char_encoder(data_config):
-    char_encoder = CharEncoder()
+def make_char_encoder(data_config: ConfigDict):
+    dataset_name = data_config.dataset
+    dataset_config = data_config[dataset_name]
+    cfg_constructor = dataset_config.config_constructor
 
-    iam_conf = data_config.iam
-    mjsynth_conf = data_config.mjsynth
-
-    iam_data_dict = load_iam_data_dict(iam_conf.path)
-    char_encoder.update_with_chars(iam_data_dict['chars'])
-    mjsynth_chars = load_mjsynth_chars(mjsynth_conf.path)
-    char_encoder.update_with_chars(mjsynth_chars)
-
-    return char_encoder
+    data_cool_cfg = eval(cfg_constructor)(dataset_config)
+    return CharEncoder(data_cool_cfg)
 
 
-def make_dataloader(data_config, mode: str, batch_size: int, num_workers: int):
+def make_datasets(config: ConfigDict):
+    dataset_config = config[config.dataset]
+    
+    df_path = os.path.join(config.root_path, config.dataset, 'marking.csv')
+    
+    df = pd.read_csv(df_path, index_col='sample_id')
+    
+    train_df = df[df['stage'] == 'train']
+    valid_df = df[df['stage'] == 'valid']
+    test_df = df[df['stage'] == 'test']
+        
+        
+    char_enc = make_char_encoder(config)
+    transforms = make_transforms(config.transforms)
+    
+    train_dataset_kwargs = {'transforms': transforms, **dataset_config.get('train_dataset_extra_args', {})}
+    
+    train_dataset_constructor = dataset_config.train_dataset_constructor
+    
+    train_dataset = eval(train_dataset_constructor)(train_df, dataset_config, 
+                                                    char_enc, **train_dataset_kwargs)
+    valid_dataset = BaseLTRDataset(valid_df, dataset_config, char_enc)
+    test_dataset = BaseLTRDataset(test_df, dataset_config, char_enc)
+    
+    return {
+        'train': train_dataset,
+        'valid': valid_dataset,
+        'test': test_dataset
+    }
 
-    if mode != 'train' and mode != 'valid' and mode != 'test':
-        raise ValueError(f"invalid dataloader mode: {mode}, expected train|valid|test")
+    
+def make_dataloaders(config: ConfigDict):
+    datasets = make_datasets(config.data)
+    
+    train_loader = DataLoader(
+        datasets['train'],
+        batch_size=config.training.batch_size,
+        sampler=RandomSampler(datasets['train']),
+        pin_memory=False,
+        num_workers=config.training.loader_num_workers,
+        collate_fn=dict_collate_fn
+    )
+    
+    valid_loader = DataLoader(
+        datasets['valid'],
+        batch_size=config.evaluate.batch_size,
+        sampler=SequentialSampler(datasets['valid']),
+        pin_memory=False,
+        num_workers=config.evaluate.loader_num_workers,
+        collate_fn=dict_collate_fn
+    )
+    
+    test_loader = DataLoader(
+        datasets['test'],
+        batch_size=config.evaluate.batch_size,
+        sampler=SequentialSampler(datasets['test']),
+        pin_memory=False,
+        drop_last=False,
+        num_workers=config.evaluate.loader_num_workers,
+        collate_fn=dict_collate_fn
+    )
+    return {
+        'train': train_loader,
+        'valid': valid_loader,
+        'test': test_loader
+    }
 
-    iam_conf = data_config.iam
-    mjsynth_conf = data_config.mjsynth
-
-    iam_data_dict = load_iam_data_dict(iam_conf.path)
-    mjsynth_chars = load_mjsynth_chars(mjsynth_conf.path)
-
-    char_encoder = CharEncoder()
-
-    char_encoder.update_with_chars(iam_data_dict['chars'])
-    char_encoder.update_with_chars(mjsynth_chars)
-
-    iam_split = make_iam_split(iam_data_dict["samples"], iam_conf.path, mode)
-
-    if mode == 'train':
-        mjsynth_transform = make_mjsynth_train_augment(mjsynth_conf.transforms)
-
-        mjsynth_split = load_mjsynth_samples(mjsynth_conf.path, mode)
-        mjsynth_dataset = LongLinesLTRDataset(mjsynth_conf.transforms.long_lines,
-                                              mjsynth_split, mjsynth_conf.path,
-                                              char_encoder, mjsynth_transform)
-
-        iam_transform = make_iam_train_augment(iam_conf.transforms)
-    else:
-        iam_transform = make_iam_test_augment(iam_conf.transforms)
-
-    iam_dataset = BaseLTRDataset(iam_split, iam_conf.path, char_encoder, iam_transform)
-
-    if mode == 'train':
-        dss = [iam_dataset, mjsynth_dataset]
-        wss = [iam_conf.weight, mjsynth_conf.weight]
-        dataset = MyConcatDataset(dss)
-    else:
-        dataset = iam_dataset
-
-    dataset = TransformLTRWrapperDataset(dataset, make_final_augment(data_config))
-
-    # create dataloader with cool sampler
-    if mode == 'train':
-        loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, sampler=MergingSampler(dss, wss),
-                                             num_workers=num_workers, collate_fn=stacking_collate_fn)
-    else:
-        loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=False,
-                                             num_workers=num_workers, collate_fn=stacking_collate_fn)
-
-    return loader
+    
+    

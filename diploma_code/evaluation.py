@@ -7,7 +7,7 @@ import typing as tp
 
 from editdistance import eval as edit_distance
 
-from diploma_code.data_loader.data_common import (
+from diploma_code.char_encoder import (
     CharEncoder
 )
 from diploma_code.utils import (
@@ -65,13 +65,6 @@ def decode_ocr_probs(log_probs: torch.Tensor, char_encoder: CharEncoder):
         res.append(re.sub('\s+', ' ', out_str))
     return res
 
-@torch.no_grad()
-def decode_targets(gt_int: torch.Tensor, char_encoder: CharEncoder):
-    "targets: (B, L)"
-    res = []
-    for b in range(gt_int.shape[0]):
-        res.append(char_encoder.decode(gt_int[b,:].tolist()))
-    return res
 
 def get_edit_distance(preds: str, targets: str, uncased: bool = False):
     """
@@ -167,7 +160,7 @@ class CERProcessor:
 
     def __call__(self, log_probs, targets, step):
         str_preds = decode_ocr_probs(log_probs, self.char_encoder)
-        str_targets = decode_targets(targets, self.char_encoder)
+        str_targets = targets
 
         if len(str_preds) != len(str_targets):
             raise ValueError(f"Strange: len pred != len target: {len(str_preds)} != {len(str_targets)}. Targets shape: {targets.shape}, log probs shape: {log_probs.shape}")

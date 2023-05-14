@@ -1,37 +1,25 @@
-from diploma_code.model import (
-    ConvBlock, FusedInvertedBottleneck, ReduceBlock, Backbone, PositionalEncoding,
-    TransformerEncoder, CTCRawDecoder, CTCDecoderModel, ParallelModel, make_single_model, make_model
+from diploma_code.model_v2 import (
+    Resnet34Backbone, BiLSTMEncoder, PositionalEncoding, TransformerEncoder, CTCDecoderModel,
+    ParallelModel, make_single_model_v2, make_model_v2
 )
-from diploma_code.data_loader.transforms import (
-    HorizontalChunker, VerticalRandomMasking, HorizontalResizeOnly, ChunkTransform
+from diploma_code.char_encoder import (
+    CharEncoder
 )
-from diploma_code.data_loader.data_common import (
-    Sample, CharEncoder
-)
-from diploma_code.data_loader.iam import (
-    load_iam_data_dict, make_iam_split
-)
-from diploma_code.data_loader.mjsynth import (
-    load_mjsynth_chars, load_mjsynth_samples
-)
-from diploma_code.data_loader.datasets import (
-    BaseLTRDataset, LongLinesLTRDataset, MyConcatDataset, MergingSampler, TransformLTRWrapperDataset
-)
-from diploma_code.data_loader.loader import (
-    stacking_collate_fn
-)
-from diploma_code.make_loader import (
-    make_dataloader, make_char_encoder
+from diploma_code.dataset import (
+    BaseLTRDataset, LongLinesLTRDataset
 )
 from diploma_code.optimizing import (
-    pytorch_make_optimizer, StepLRWithWarmup, make_lr_scheduler
+    pytorch_make_optimizer, StepLRWithWarmup, make_lr_scheduler, make_lr_scheduler_torch
 )
 from diploma_code.utils import (
-    log_metric_wandb, batch_to_device
+    log_metric_wandb, batch_to_device, dict_collate_fn, seed_everything
 )
 from diploma_code.evaluation import (
-    my_ctc_loss, my_dml_loss, decode_ocr_probs, decode_targets, get_edit_distance,
+    my_ctc_loss, my_dml_loss, decode_ocr_probs, get_edit_distance,
     EpochValueProcessor, EpochDMLProcessor, CERProcessor
+)
+from diploma_code.make_loader import (
+    make_char_encoder, make_dataloaders
 )
 
 from ml_collections import ConfigDict
@@ -51,7 +39,7 @@ class LTRTrainer:
     def __init__(self, config: ConfigDict):
 
         self.config = config
-        self.model = make_model(config.model)
+        self.model = make_model_v2(config.model)
         self.checkpoints_folder = config.training.checkpoints_folder
         self.evaluate = config.eval
 
@@ -133,24 +121,25 @@ class LTRTrainer:
 
     def configure_train_state(self):
         self.optimizer = pytorch_make_optimizer(self.model, self.config.optimizer)
-        self.lr_scheduler = make_lr_scheduler(self.optimizer, self.config.lr_scheduler)
+        self.lr_scheduler = make_lr_scheduler_torch(self.optimizer, self.config.lr_scheduler)
         self.epoch = 1
         self.step = 0
 
 
     def configure_loader(self, mode: str) -> torch.utils.data.DataLoader:
         LTRTrainer.validate_mode(mode)
-        loader_cfg = self.config.training if mode == 'train' else self.config.evaluate
 
         attr_name = f"{mode}_loader"
         try:
             return self.__getattribute__(attr_name)
         except AttributeError:
-            loader = make_dataloader(self.config.data, mode, batch_size=loader_cfg.batch_size,
-                                     num_workers=loader_cfg.loader_num_workers)
+            loaders = make_dataloaders(self.config)
+            self.train_loader = loaders['train']
+            self.valid_loader = loaders['valid']
+            self.test_loader = loaders['test']
+            
+            return self.__getattribute__(attr_name)
 
-            self.__setattr__(attr_name, loader)
-            return loader
 
 
     def make_criterion_processor(self, mode, report_per_batch, report_final=True):
@@ -179,17 +168,14 @@ class LTRTrainer:
             if not os.path.exists(self.checkpoints_folder):
                 os.makedirs(self.checkpoints_folder)
             with open(os.path.join(self.checkpoints_folder, "nan.txt"), "w+") as f:
-                f.write(f"Shapes: input: {batch['input'].shape}, "
-                        f"gt_text: {batch['gt_text'].shape}, w: {batch['w'].shape}, "
-                        f"idx: {batch['idx'].shape}, {batch['tgt_len'].shape}\n")
-                for name in ['w', 'gt_text', 'tgt_len', 'idx']:
-                    f.write(f"{name}: {batch[name]}\n")
+                for k, v in batch.items():
+                    f.write(f"'{k}' shape: {v.__getattr__('shape', None)}")
+                    f.write(f"'{k}': {v}")
                 f.write(f"loss: {val}\n")
                 f.write(f"inp_len: {inp_len}\n")
             
             self.save_nan_checkpoint()
             
-
         if np.isnan(val) or np.isinf(val):
             # zero out huge losses
             loss.fill_(0)
@@ -218,13 +204,16 @@ class LTRTrainer:
                 self.step += 1
 
                 batch = batch_to_device(batch, self.device)
-                gt_text, tgt_len = batch['gt_text'], batch['tgt_len']
+                gt_text, tgt_len = batch['gt_text'], batch['encoded_length']
 
-                log_probs, inp_len = self.model(batch)
+                logits = self.model(batch['image'])
+                inp_len = torch.IntTensor([logits.size(1)] * batch['encoded'].shape[0])         
+                log_probs = logits.log_softmax(2).permute(1, 0, 2)
                 log_probs, inp_len = log_probs.to(self.device), inp_len.to(self.device)
-                loss = self.calc_loss(log_probs, gt_text, inp_len, tgt_len)
+                                        
+                loss = self.calc_loss(log_probs, batch['encoded'], inp_len, tgt_len)
 
-                result_loss = criterion_processor(loss, gt_text.size(0), self.step)
+                result_loss = criterion_processor(loss, len(gt_text), self.step)
 
                 self.validate_inf_or_nan_loss(result_loss, batch, log_probs, inp_len)
 
@@ -277,10 +266,14 @@ class LTRTrainer:
             batch = batch_to_device(batch, self.device)
             gt_text, tgt_len = batch['gt_text'], batch['tgt_len']
 
-            log_probs, inp_len = self.model(batch)
-            loss = self.calc_loss(log_probs, gt_text, inp_len, tgt_len)
+            logits = self.model(batch['image'])
+            inp_len = torch.IntTensor([logits.size(1)] * batch['encoded'].shape[0])         
+            log_probs = logits.log_softmax(2).permute(1, 0, 2)
+            log_probs, inp_len = log_probs.to(self.device), inp_len.to(self.device)
 
-            _ = criterion_processor(loss, gt_text.size(0), self.step)
+            loss = self.calc_loss(log_probs, batch['encoded'], inp_len, tgt_len)
+
+            _ = criterion_processor(loss, len(gt_text), self.step)
             _ = cer_processor(log_probs, gt_text, self.step)
 
 
