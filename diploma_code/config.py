@@ -19,7 +19,7 @@ def global_vars_config():
 
 
 def default_attn_ctc_model_config(constants):
-    
+
     hidden_features = HIDDEN_FEATURES
 
     model = config_dict.ConfigDict()
@@ -43,41 +43,41 @@ def default_attn_ctc_model_config(constants):
     ctc.out_features = 81 # counted later
     ctc.image_height = IMAGE_HEIGHT
     ctc.chunk_size = CHUNK_SIZE
-    
+
     return model
 
 
 def default_model_v2_config(global_vars: config_dict.ConfigDict):
-    
+
     model = config_dict.ConfigDict()
-        
+
     backbone = model.backbone = config_dict.ConfigDict()
-    
+
     backbone.constructor = "Resnet34Backbone"
-    
+
     backbone.Resnet34Backbone = config_dict.ConfigDict()
     backbone.Resnet34Backbone.num_layers = 3
     backbone.Resnet34Backbone.pretrained = True
     backbone.Resnet34Backbone.max_pool_stride_1 = True
-    
+
     encoder = model.encoder = config_dict.ConfigDict()
     encoder.constructor = "BiLSTMEncoder"
-    
+
     encoder.BiLSTMEncoder = config_dict.ConfigDict()
     encoder.BiLSTMEncoder.input_size = global_vars.get_ref('hidden_features')
     encoder.BiLSTMEncoder.hidden_size = global_vars.get_ref('hidden_features')
     encoder.BiLSTMEncoder.num_layers = 3
     encoder.BiLSTMEncoder.dropout = 0.1
-    
+
     encoder.TransformerEncoder = config_dict.ConfigDict()
     encoder.TransformerEncoder.in_features = global_vars.get_ref('hidden_features')
     encoder.TransformerEncoder.num_layers = 4
     encoder.TransformerEncoder.num_heads = 4
     encoder.TransformerEncoder.pe_max_len = 1500
-    
+
     decoder = model.decoder = config_dict.ConfigDict()
     decoder.constructor = "CTCDecoderModel"
-    
+
     decoder.CTCDecoderModel = config_dict.ConfigDict()
     decoder.CTCDecoderModel.num_classes = global_vars.get_ref('num_classes')
     decoder.CTCDecoderModel.time_feature_count = global_vars.get_ref('time_feature_count')
@@ -89,12 +89,12 @@ def default_model_v2_config(global_vars: config_dict.ConfigDict):
 def default_diploma_config():
 
     CONFIG = config_dict.ConfigDict()
-    
+
     global_vars = CONFIG.global_vars = global_vars_config()
 
     model = CONFIG.model = config_dict.ConfigDict()
     model.type = "single" # single / duo
-    
+
     model.first = default_model_v2_config(global_vars)
     model.second = default_model_v2_config(global_vars)
 
@@ -103,11 +103,11 @@ def default_diploma_config():
     data.image_height = IMAGE_HEIGHT
     data.image_width = IMAGE_WIDTH
     data.root_path = "/home/jupyter/mnt/datasets/diploma"
-    
+
     data.dataset = 'iam'
 
     iam = data.iam = config_dict.ConfigDict()
-    
+
     iam.train_dataset_constructor = "BaseLTRDataset"
     iam.config_constructor = "diploma_code.configs.IamConfig"
     iam.chars = ' !"#&\'()*+,-./0123456789:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
@@ -115,11 +115,11 @@ def default_diploma_config():
     iam.length = 9652
     iam.image_height = IMAGE_HEIGHT
     iam.image_width = IMAGE_WIDTH
-    
+
     transforms = data.transforms = config_dict.ConfigDict()
-    
+
     basic_albums = transforms.basic_albums = config_dict.ConfigDict()
-    
+
     basic_albums.CLAHE = config_dict.ConfigDict()
     basic_albums.CLAHE.enabled = True
     basic_albums.CLAHE.params = config_dict.ConfigDict()
@@ -127,7 +127,7 @@ def default_diploma_config():
     basic_albums.CLAHE.params.tile_grid_size = (8, 8)
     basic_albums.CLAHE.params.p = 0.25
     basic_albums.CLAHE.params.always_apply = False
-    
+
     basic_albums.Rotate = config_dict.ConfigDict()
     basic_albums.Rotate.enabled = True
     basic_albums.Rotate.params = config_dict.ConfigDict()
@@ -135,24 +135,24 @@ def default_diploma_config():
     basic_albums.Rotate.params.interpolation = 1
     basic_albums.Rotate.params.border_mode = 0
     basic_albums.Rotate.params.p = 0.5
-    
+
     basic_albums.ImageCompression = config_dict.ConfigDict()
     basic_albums.ImageCompression.enabled = True
     basic_albums.ImageCompression.params = config_dict.ConfigDict()
     basic_albums.ImageCompression.params.quality_lower = 75
     basic_albums.ImageCompression.params.p = 0.5
-    
+
     blot = transforms.blot = config_dict.ConfigDict()
     blot.enabled = True
     blot.p = 0.5
     blot.params = config_dict.ConfigDict()
     blot.params.rect_config = config_dict.ConfigDict()
-    
+
     blot.params.rect_config.x = (None, None)
     blot.params.rect_config.y = (None, None)
     blot.params.rect_config.h = (25, 50)
     blot.params.rect_config.w = (10 * 2, 30 * 2)
-    
+
     blot.params.params = config_dict.ConfigDict()
     blot.params.params.incline = (10, 50)
     blot.params.params.intensivity = (0.75, 0.75)
