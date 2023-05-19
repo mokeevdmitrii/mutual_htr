@@ -217,9 +217,9 @@ def default_diploma_config():
 
     optim = CONFIG.optimizer = config_dict.ConfigDict()
     optim.constructor = "torch.optim.AdamW"
-    optim.weight_decay = 1e-4
+    optim.weight_decay = 1e-2
     optim.params = config_dict.ConfigDict()
-    optim.params.lr = 3e-4
+    optim.params.lr = 2e-4
     optim.params.betas = (0.9, 0.999)
 
     lr_scheduler = CONFIG.lr_scheduler = config_dict.ConfigDict()

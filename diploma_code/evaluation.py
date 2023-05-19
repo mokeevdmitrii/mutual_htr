@@ -146,7 +146,7 @@ class EpochDMLProcessor:
 
     def finalize(self, step):
 
-        return l1.finalize(step) + l2.finalize(step) + kl.finalize(step)
+        return self.loss_1.finalize(step) + self.loss_2.finalize(step) + self.kl.finalize(step)
 
 
 

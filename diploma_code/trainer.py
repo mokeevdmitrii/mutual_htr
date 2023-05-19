@@ -42,6 +42,8 @@ class LTRTrainer:
         self.model = make_model_v2(config.model)
         self.checkpoints_folder = config.training.checkpoints_folder
         self.evaluate = config.eval
+        
+        self.model_type = self.config.model.type
 
         self.had_nan = False
         self.had_grad_nan = False
@@ -141,25 +143,28 @@ class LTRTrainer:
             return self.__getattribute__(attr_name)
 
 
-
-    def make_criterion_processor(self, mode, report_per_batch, report_final=True):
-        if self.config.model.type == "single":
-            return EpochValueProcessor('loss', mode, report_per_batch=report_per_batch, report_final=report_final)
-        elif self.config.model.type == "duo":
-            return EpochDMLProcessor("loss", mode, report_per_batch=report_per_batch, report_final=report_final)
+    def make_criterion_processor(self, mode, report_per_batch, model_type=None, name='loss', report_final=True):
+        if model_type is None:
+            model_type = self.config.model.type
+        if model_type == "single":
+            return EpochValueProcessor(name, mode, report_per_batch=report_per_batch, report_final=report_final)
+        elif model_type == "duo":
+            return EpochDMLProcessor(name, mode, report_per_batch=report_per_batch, report_final=report_final)
         else:
-            raise ValueError(f"Invalid model mode: {mode}")
+            raise ValueError(f"Invalid model mode: {model_type}")
 
-    def make_cer_processor(self, mode, report_per_batch=False, report_final=True):
-        return CERProcessor(self.char_encoder, 'cer', mode, report_per_batch=report_per_batch, report_final=report_final)
+    def make_cer_processor(self, mode, name='cer', report_per_batch=False, report_final=True):
+        return CERProcessor(self.char_encoder, name, mode, report_per_batch=report_per_batch, report_final=report_final)
 
-    def calc_loss(self, log_probs, gt_text, inp_len, tgt_len):
-        if self.config.model.type == "single":
+    def calc_loss(self, log_probs, gt_text, inp_len, tgt_len, model_type=None):
+        if model_type is None:
+            model_type = self.config.model.type
+        if model_type == "single":
             return my_ctc_loss(log_probs, gt_text, inp_len, tgt_len)
-        elif self.config.model.type == "duo":
+        elif model_type == "duo":
             return my_dml_loss(log_probs, gt_text, inp_len, tgt_len)
         else:
-            raise ValueError(f"Invalid model mode: {self.config.model.type}")
+            raise ValueError(f"Invalid model mode: {model_type}")
 
     def validate_inf_or_nan_loss(self, loss, batch, log_preds, inp_len):
         val = loss.item()
@@ -207,9 +212,14 @@ class LTRTrainer:
                 gt_text, tgt_len = batch['gt_text'], batch['encoded_length']
 
                 logits = self.model(batch['image'])
-                inp_len = torch.IntTensor([logits.size(1)] * batch['encoded'].shape[0])         
-                log_probs = logits.log_softmax(2).permute(1, 0, 2)
-                log_probs, inp_len = log_probs.to(self.device), inp_len.to(self.device)
+                
+                if self.model_type == 'single':
+                    inp_len = torch.IntTensor([logits.size(1)] * batch['encoded'].shape[0]).to(self.device)   
+                    log_probs = logits.log_softmax(2).permute(1, 0, 2).to(self.device)
+                elif self.model_type == 'duo':
+                    inp_len = tuple(torch.IntTensor([l.size(1)] * batch['encoded'].shape[0]).to(self.device) for l in logits)
+                    log_probs = tuple(l.log_softmax(2).permute(1, 0, 2).to(self.device) for l in logits)
+                    
                                         
                 loss = self.calc_loss(log_probs, batch['encoded'], inp_len, tgt_len)
 
@@ -254,24 +264,45 @@ class LTRTrainer:
 
 
     def validate(self, mode):
+        if self.model_type == 'duo':
+            return self.validate_duo(mode)
+        
         val_loader = self.configure_loader(mode=mode)
 
         criterion_processor = self.make_criterion_processor(mode=mode, report_per_batch=False, report_final=True)
         cer_processor = self.make_cer_processor(mode=mode)
+        
+        self.validate_impl(self.model, val_loader, criterion_processor, cer_processor)
+    
+    
+    def validate_duo(self, mode):
+        
+        val_loader = self.configure_loader(mode=mode)
+        
+        loss_1 = self.make_criterion_processor(mode=mode, model_type='single', report_per_batch=False, report_final=True, name='loss_1')
+        loss_2 = self.make_criterion_processor(mode=mode, model_type='single', report_per_batch=False, report_final=True, name='loss_2')
+        
+        cer_1 = self.make_cer_processor(mode=mode, name='cer_1')
+        cer_2 = self.make_cer_processor(mode=mode, name='cer_2')
+        
+        self.validate_impl(self.model.models[0], val_loader, loss_1, cer_1)
+        self.validate_impl(self.model.models[1], val_loader, loss_2, cer_2)
+    
+    def validate_impl(self, model, val_loader, criterion_processor, cer_processor):
 
-        prev_mode = self.model.training
-        self.model.eval()
+        prev_mode = model.training
+        model.eval()
 
         def do_iter(batch, criterion_processor, cer_processor):
             batch = batch_to_device(batch, self.device)
-            gt_text, tgt_len = batch['gt_text'], batch['tgt_len']
+            gt_text, tgt_len = batch['gt_text'], batch['encoded_length']
 
-            logits = self.model(batch['image'])
+            logits = model(batch['image'])
             inp_len = torch.IntTensor([logits.size(1)] * batch['encoded'].shape[0])         
             log_probs = logits.log_softmax(2).permute(1, 0, 2)
             log_probs, inp_len = log_probs.to(self.device), inp_len.to(self.device)
 
-            loss = self.calc_loss(log_probs, batch['encoded'], inp_len, tgt_len)
+            loss = self.calc_loss(log_probs, batch['encoded'], inp_len, tgt_len, model_type='single')
 
             _ = criterion_processor(loss, len(gt_text), self.step)
             _ = cer_processor(log_probs, gt_text, self.step)
@@ -283,7 +314,8 @@ class LTRTrainer:
             _ = criterion_processor.finalize(self.step)
             _ = cer_processor.finalize(self.step)
 
-        self.model.train(prev_mode)
+        model.train(prev_mode)
+        
 
 
     def evaluate(self):

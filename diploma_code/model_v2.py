@@ -11,7 +11,7 @@ import math
 
 
 def Resnet34Backbone(num_layers, max_pool_stride_1=True, pretrained=True):
-    m = tv.models.resnet34(weights=tv.models.ResNet34_Weights.DEFAULT)
+    m = tv.models.resnet34(pretrained=pretrained)
     input_conv = nn.Conv2d(3, 64, 7, 1, 3)
     if max_pool_stride_1:
         first_max_pool = torch.nn.MaxPool2d(kernel_size=3, stride=1, padding=1, dilation=1, ceil_mode=False)
@@ -112,7 +112,7 @@ class ParallelModel(nn.Module):
 
     def forward(self, *args, **kwargs):
         results = [model(*args, **kwargs) for model in self.models]
-        return tuple(t for t in zip(*results))
+        return tuple(results)
     
     
 def make_single_model_v2(config: ConfigDict):
