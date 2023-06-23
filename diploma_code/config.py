@@ -19,7 +19,7 @@ def global_vars_config():
 
 
 def default_attn_ctc_model_config(constants):
-
+    
     hidden_features = HIDDEN_FEATURES
 
     model = config_dict.ConfigDict()
@@ -43,41 +43,42 @@ def default_attn_ctc_model_config(constants):
     ctc.out_features = 81 # counted later
     ctc.image_height = IMAGE_HEIGHT
     ctc.chunk_size = CHUNK_SIZE
-
+    
     return model
 
 
 def default_model_v2_config(global_vars: config_dict.ConfigDict):
-
+    
     model = config_dict.ConfigDict()
-
+        
     backbone = model.backbone = config_dict.ConfigDict()
-
+    
     backbone.constructor = "Resnet34Backbone"
-
+    
     backbone.Resnet34Backbone = config_dict.ConfigDict()
     backbone.Resnet34Backbone.num_layers = 3
     backbone.Resnet34Backbone.pretrained = True
     backbone.Resnet34Backbone.max_pool_stride_1 = True
-
+    
     encoder = model.encoder = config_dict.ConfigDict()
     encoder.constructor = "BiLSTMEncoder"
-
+    
     encoder.BiLSTMEncoder = config_dict.ConfigDict()
     encoder.BiLSTMEncoder.input_size = global_vars.get_ref('hidden_features')
     encoder.BiLSTMEncoder.hidden_size = global_vars.get_ref('hidden_features')
     encoder.BiLSTMEncoder.num_layers = 3
     encoder.BiLSTMEncoder.dropout = 0.1
-
+    
     encoder.TransformerEncoder = config_dict.ConfigDict()
     encoder.TransformerEncoder.in_features = global_vars.get_ref('hidden_features')
     encoder.TransformerEncoder.num_layers = 4
     encoder.TransformerEncoder.num_heads = 4
+    encoder.TransformerEncoder.hidden_features = 1024
     encoder.TransformerEncoder.pe_max_len = 1500
-
+    
     decoder = model.decoder = config_dict.ConfigDict()
     decoder.constructor = "CTCDecoderModel"
-
+    
     decoder.CTCDecoderModel = config_dict.ConfigDict()
     decoder.CTCDecoderModel.num_classes = global_vars.get_ref('num_classes')
     decoder.CTCDecoderModel.time_feature_count = global_vars.get_ref('time_feature_count')
@@ -89,12 +90,14 @@ def default_model_v2_config(global_vars: config_dict.ConfigDict):
 def default_diploma_config():
 
     CONFIG = config_dict.ConfigDict()
-
+    
+    CONFIG.seed = 42
+    
     global_vars = CONFIG.global_vars = global_vars_config()
 
     model = CONFIG.model = config_dict.ConfigDict()
-    model.type = "single" # single / duo
-
+    model.type = "single" # single / duo / duo_div
+    
     model.first = default_model_v2_config(global_vars)
     model.second = default_model_v2_config(global_vars)
 
@@ -103,11 +106,11 @@ def default_diploma_config():
     data.image_height = IMAGE_HEIGHT
     data.image_width = IMAGE_WIDTH
     data.root_path = "/home/jupyter/mnt/datasets/diploma"
-
+    
     data.dataset = 'iam'
 
     iam = data.iam = config_dict.ConfigDict()
-
+    
     iam.train_dataset_constructor = "BaseLTRDataset"
     iam.config_constructor = "diploma_code.configs.IamConfig"
     iam.chars = ' !"#&\'()*+,-./0123456789:;?ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
@@ -115,11 +118,21 @@ def default_diploma_config():
     iam.length = 9652
     iam.image_height = IMAGE_HEIGHT
     iam.image_width = IMAGE_WIDTH
-
+    
+    saintgall = data.saintgall = config_dict.ConfigDict()
+    
+    saintgall.train_dataset_constructor = "BaseLTRDataset"
+    saintgall.config_constructor = "diploma_code.configs.SaintgallConfig"
+    saintgall.chars = ' &.ABCDEFGHILMNOPQRSTUVXZabcdefghiklmnopqrstuvwxyz'
+    saintgall.blank = 'β'
+    saintgall.length = 468
+    saintgall.image_height = IMAGE_HEIGHT
+    saintgall.image_width = IMAGE_WIDTH
+    
     transforms = data.transforms = config_dict.ConfigDict()
-
+    
     basic_albums = transforms.basic_albums = config_dict.ConfigDict()
-
+    
     basic_albums.CLAHE = config_dict.ConfigDict()
     basic_albums.CLAHE.enabled = True
     basic_albums.CLAHE.params = config_dict.ConfigDict()
@@ -127,7 +140,7 @@ def default_diploma_config():
     basic_albums.CLAHE.params.tile_grid_size = (8, 8)
     basic_albums.CLAHE.params.p = 0.25
     basic_albums.CLAHE.params.always_apply = False
-
+    
     basic_albums.Rotate = config_dict.ConfigDict()
     basic_albums.Rotate.enabled = True
     basic_albums.Rotate.params = config_dict.ConfigDict()
@@ -135,24 +148,24 @@ def default_diploma_config():
     basic_albums.Rotate.params.interpolation = 1
     basic_albums.Rotate.params.border_mode = 0
     basic_albums.Rotate.params.p = 0.5
-
+    
     basic_albums.ImageCompression = config_dict.ConfigDict()
     basic_albums.ImageCompression.enabled = True
     basic_albums.ImageCompression.params = config_dict.ConfigDict()
     basic_albums.ImageCompression.params.quality_lower = 75
     basic_albums.ImageCompression.params.p = 0.5
-
+    
     blot = transforms.blot = config_dict.ConfigDict()
     blot.enabled = True
     blot.p = 0.5
     blot.params = config_dict.ConfigDict()
     blot.params.rect_config = config_dict.ConfigDict()
-
+    
     blot.params.rect_config.x = (None, None)
     blot.params.rect_config.y = (None, None)
     blot.params.rect_config.h = (25, 50)
     blot.params.rect_config.w = (10 * 2, 30 * 2)
-
+    
     blot.params.params = config_dict.ConfigDict()
     blot.params.params.incline = (10, 50)
     blot.params.params.intensivity = (0.75, 0.75)
@@ -194,9 +207,10 @@ def default_diploma_config():
 #     mjsynth.transforms.long_lines.max_space_to_h = 1.0
 #     mjsynth.transforms.long_lines.space_value = 0.0
 
-    training = CONFIG.training = config_dict.ConfigDict()
 
     CONFIG.eval = False
+
+    training = CONFIG.training = config_dict.ConfigDict()
 
     training.batch_size = 8
     training.num_epochs = 300
@@ -206,8 +220,11 @@ def default_diploma_config():
     training.checkpoints_folder = "./checkpoints"
     training.loader_num_workers = 6
     training.load_from_checkpoint = False
-    training.grad_clip_value = 1
-
+    training.load_train_state = False
+    training.grad_clip_value = 1.
+    
+    
+    CONFIG.load_checkpoints_folder = training.get_oneway_ref('checkpoints_folder')
 
     evaluate = CONFIG.evaluate = config_dict.ConfigDict()
     evaluate.batch_size = 16
@@ -224,14 +241,40 @@ def default_diploma_config():
 
     lr_scheduler = CONFIG.lr_scheduler = config_dict.ConfigDict()
     lr_scheduler.constructor = "torch.optim.lr_scheduler.OneCycleLR"
+    lr_scheduler.use_lambda = False
     lr_scheduler.params = config_dict.ConfigDict()
     lr_scheduler.params.max_lr = 0.001
     lr_scheduler.params.pct_start = 0.1
     lr_scheduler.params.anneal_strategy = 'cos'
     lr_scheduler.params.final_div_factor = 10 ** 5
-    lr_scheduler.params.epochs = training.get_ref('num_epochs')
+    lr_scheduler.params.epochs = training.get_oneway_ref('num_epochs')
     lr_scheduler.params.steps_per_epoch = (data.get_ref(data.dataset).get().get_ref('length') + training.get_ref('batch_size') - 1) // training.get_ref('batch_size')
-
+    
+    
+    b_optim = CONFIG.backbone_optimizer = config_dict.ConfigDict()
+    b_optim.constructor = "torch.optim.AdamW"
+    b_optim.weight_decay = 1e-2
+    b_optim.params = config_dict.ConfigDict()
+    b_optim.params.lr = 2e-4
+    b_optim.params.betas = (0.9, 0.999)
+    
+    b_lr_scheduler = CONFIG.backbone_lr_scheduler = config_dict.ConfigDict()
+    b_lr_scheduler.constructor = "torch.optim.lr_scheduler.OneCycleLR"
+    b_lr_scheduler.use_lambda = False
+    b_lr_scheduler.params = config_dict.ConfigDict()
+    b_lr_scheduler.params.max_lr = 0.001
+    b_lr_scheduler.params.pct_start = 0.1
+    b_lr_scheduler.params.anneal_strategy = 'cos'
+    b_lr_scheduler.params.final_div_factor = 10 ** 5
+    b_lr_scheduler.params.epochs = training.get_oneway_ref('num_epochs')
+    b_lr_scheduler.params.steps_per_epoch = (data.get_ref(data.dataset).get().get_ref('length') + training.get_ref('batch_size') - 1) // training.get_ref('batch_size')
+    
+    
+    dml_conf = CONFIG.dml = config_dict.ConfigDict()
+    dml_conf.min_weight = 0.
+    dml_conf.max_weight = 1.
+    # 1 epoch by default
+    dml_conf.warmup_steps = (data.get_ref(data.dataset).get().get_ref('length') + training.get_ref('batch_size') - 1) // training.get_ref('batch_size')
 
     wandb = CONFIG.wandb = config_dict.ConfigDict()
     wandb.project_name = "diploma_dml"

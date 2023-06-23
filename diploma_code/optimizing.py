@@ -4,7 +4,12 @@ from ml_collections import ConfigDict
 
 from diploma_code.model_v2 import PositionalEncoding
 
-def pytorch_configure_optim_groups(model, weight_decay=0):
+import typing as tp
+
+def default_param_chooser(x: str):
+    return True
+
+def pytorch_configure_optim_groups(model: torch.nn.Module, param_chooser: tp.Callable[[str], bool] = default_param_chooser, weight_decay: float=0):
     """
     I love and hate pytorch
     """
@@ -17,7 +22,10 @@ def pytorch_configure_optim_groups(model, weight_decay=0):
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():
             fpn = '%s.%s' % (mn, pn) if mn else pn # full param name
-
+            
+            if not param_chooser(fpn):
+                continue
+            
             if 'bias' in pn:
                 # all biases will not be decayed
                 no_decay.add(fpn)
@@ -30,7 +38,7 @@ def pytorch_configure_optim_groups(model, weight_decay=0):
 
 
     # validate that we considered every parameter
-    param_dict = {pn: p for pn, p in model.named_parameters()}
+    param_dict = {pn: p for pn, p in model.named_parameters() if param_chooser(pn)}
     inter_params = decay & no_decay
     union_params = decay | no_decay
     assert len(inter_params) == 0, "parameters %s made it into both decay/no_decay sets!" % (str(inter_params), )
@@ -45,11 +53,12 @@ def pytorch_configure_optim_groups(model, weight_decay=0):
     return optim_groups
 
 
-def pytorch_make_optimizer(model: torch.nn.Module, optimizer_config: ConfigDict):
+
+def pytorch_make_optimizer(model: torch.nn.Module, optimizer_config: ConfigDict, param_chooser: tp.Callable[[str], bool] = default_param_chooser):
     if 'weight_decay' in optimizer_config:
-        optim_groups = pytorch_configure_optim_groups(model, optimizer_config.weight_decay)
+        optim_groups = pytorch_configure_optim_groups(model, param_chooser, optimizer_config.weight_decay)
     else:
-        optim_groups = [{"params": model.parameters()}]
+        optim_groups = [{"params": [p for pn, p in model.named_parameters() if param_chooser(pn)]}]
 
     return eval(optimizer_config.constructor)(optim_groups, **optimizer_config.params)
 
@@ -71,12 +80,37 @@ class StepLRWithWarmup:
         return desired_lr / self.initial_lr
 
 
-def make_lr_scheduler(optimizer, scheduler_config):
+
+class ReverseSqrtWithLinearWarmup:
+    
+    def __init__(self, warmup_steps):
+        self.warmup_steps = int(warmup_steps)
+        
+    def __call__(self, step: int):
+        return (self.warmup_steps ** 0.5) * min((step + 1) ** (-0.5), (step + 1) * (self.warmup_steps ** (-1.5)))
+    
+    
+class ConstantLambdaLR:
+    
+    def __init__(self):
+        pass
+    
+    def __call__(self, step: int) -> float:
+        return 1.
+        
+
+def make_lr_scheduler_lambda(optimizer, scheduler_config):
     return torch.optim.lr_scheduler.LambdaLR(optimizer=optimizer,
                                              lr_lambda=eval(scheduler_config.constructor)(
                                                  **scheduler_config.params
                                              ))
 
+
 def make_lr_scheduler_torch(optimizer, scheduler_config):
     return eval(scheduler_config.constructor)(optimizer=optimizer, **scheduler_config.params)
 
+def make_lr_scheduler(optimizer, scheduler_config):
+    if scheduler_config.use_lambda:
+        return make_lr_scheduler_lambda(optimizer, scheduler_config)
+    else:
+        return make_lr_scheduler_torch(optimizer, scheduler_config)

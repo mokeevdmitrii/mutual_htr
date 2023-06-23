@@ -13,7 +13,11 @@ from diploma_code.char_encoder import (
 from diploma_code.utils import (
     log_metric_wandb
 )
+
+from ml_collections import ConfigDict
+
 import re
+
 
 def my_ctc_loss(log_probs, targets, input_lengths, target_lengths):
     """
@@ -23,6 +27,37 @@ def my_ctc_loss(log_probs, targets, input_lengths, target_lengths):
     return F.ctc_loss(log_probs, targets, input_lengths, target_lengths, reduction='mean', zero_infinity=True)
 
 
+def my_mcl_loss(log_probs, targets, input_lengths, target_lengths):
+    """
+    log_probs: (L, B, C)
+    targets: (B, L)
+    """
+    lp_1, lp_2 = log_probs
+    il_1, il_2 = input_lengths
+    ctc_1 = F.ctc_loss(lp_1, targets, il_1, target_lengths, reduction='none', zero_infinity=True)
+    ctc_2 = F.ctc_loss(lp_2, targets, il_2, target_lengths, reduction='none', zero_infinity=True)
+    
+    loss_1 = torch.mean(torch.div(ctc_1, target_lengths))
+    loss_2 = torch.mean(torch.div(ctc_2, target_lengths))
+    loss_min = torch.mean(torch.div(torch.minimum(ctc_1, ctc_2), target_lengths))
+    loss_max = torch.mean(torch.div(torch.maximum(ctc_1, ctc_2), target_lengths))
+    return {
+        'loss_1': loss_1,
+        'loss_2': loss_2,
+        'loss_weighted': 0.9 * loss_min + 0.1 * loss_max
+    }
+
+    
+    
+def kl_div_agg(pointwise, target_lengths):
+    loss = 0
+    for b in range(pointwise.size(1)):
+        # add mean over length for each batch
+        loss = loss + torch.sum(torch.mean(pointwise[:target_lengths[b], b, :], dim=0))
+    # average over batch
+    return loss / pointwise.size(1)
+    
+    
 def kl_div(log_inputs, log_targets, target_lengths, *args, **kwargs):
     """
     log_inputs: (L, B, C)
@@ -30,12 +65,14 @@ def kl_div(log_inputs, log_targets, target_lengths, *args, **kwargs):
     input_lengths: unused
     """
     pointwise = F.kl_div(log_inputs, log_targets, reduction="none", log_target=True)
-    loss = 0
-    for b in range(log_inputs.size(1)):
-        # add mean over length for each batch
-        loss = loss + torch.sum(torch.mean(pointwise[:target_lengths[b], b, :], dim=0))
-    # average over batch
-    return loss / log_targets.size(1)
+    return kl_div_agg(pointwise, target_lengths)
+
+
+def trkl_div(log_inputs, log_targets, target_lengths, *args, **kwargs):
+    pointwise = F.kl_div(log_inputs, log_targets, reduction="none", log_target=True)
+    pointwise = torch.clamp(pointwise, min=0)
+    return kl_div_agg(pointwise, target_lengths)
+
 
 def my_dml_loss(log_probs: tp.Tuple[torch.Tensor, torch.Tensor],
              targets, input_lengths, target_lengths):
@@ -45,6 +82,20 @@ def my_dml_loss(log_probs: tp.Tuple[torch.Tensor, torch.Tensor],
     ctc_1 = my_ctc_loss(lp_1, targets, il_1, target_lengths)
     ctc_2 = my_ctc_loss(lp_2, targets, il_2, target_lengths)
     kl = (kl_div(lp_1, lp_2.detach(), il_2) + kl_div(lp_2, lp_1.detach(), il_1)) / 2
+    return {
+        'loss_1': ctc_1,
+        'loss_2': ctc_2,
+        'kl': kl
+    }
+
+def my_dml_loss_tr(log_probs: tp.Tuple[torch.Tensor, torch.Tensor],
+             targets, input_lengths, target_lengths):
+
+    lp_1, lp_2 = log_probs
+    il_1, il_2 = input_lengths
+    ctc_1 = my_ctc_loss(lp_1, targets, il_1, target_lengths)
+    ctc_2 = my_ctc_loss(lp_2, targets, il_2, target_lengths)
+    kl = (trkl_div(lp_1, lp_2.detach(), il_2) + trkl_div(lp_2, lp_1.detach(), il_1)) / 2
     return {
         'loss_1': ctc_1,
         'loss_2': ctc_2,
@@ -126,13 +177,24 @@ class EpochDMLProcessor:
     def __init__(self,
                  name: str,
                  mode: str,
+                 dml_config: ConfigDict,
                  report_per_batch: bool = False,
                  report_final: bool = True,
-                 log_metric=log_metric_wandb):
+                 log_metric=log_metric_wandb,
+                 truncated=False):
 
+        kl_name = f'{name}_kl' if not truncated else f'tr_{name}_kl'
+        
         self.loss_1 = EpochValueProcessor(f'{name}_1', mode, report_per_batch, report_final, log_metric)
         self.loss_2 = EpochValueProcessor(f'{name}_2', mode, report_per_batch, report_final, log_metric)
         self.kl = EpochValueProcessor(f'{name}_kl', mode, report_per_batch, report_final, log_metric)
+        
+        self.log_metric = log_metric
+        self.mode = mode
+        
+        self.min_weight = dml_config.min_weight
+        self.max_weight = dml_config.max_weight
+        self.warmup_steps = dml_config.warmup_steps
 
     def __call__(self, loss, batch_size, step):
 
@@ -141,13 +203,49 @@ class EpochDMLProcessor:
         l1 = self.loss_1(l1, batch_size, step)
         l2 = self.loss_2(l2, batch_size, step)
         kl = self.kl(kl, batch_size, step)
+        
+        if step >= self.warmup_steps:
+            weight = self.max_weight
+        else:
+            weight = self.min_weight + (step / self.warmup_steps) * (self.max_weight - self.min_weight)
+            
+        self.log_metric('kl_weight', self.mode, weight, step)
 
-        return l1 + l2 + kl
+        return l1 + l2 + weight * kl
 
     def finalize(self, step):
 
         return self.loss_1.finalize(step) + self.loss_2.finalize(step) + self.kl.finalize(step)
 
+    
+
+class EpochDivProcessor:
+    def __init__(self,
+                 name: str,
+                 mode: str,
+                 report_per_batch: bool = False,
+                 report_final: bool = True,
+                 log_metric=log_metric_wandb):
+        
+        self.loss_1 = EpochValueProcessor(f'{name}_1', mode, report_per_batch, report_final, log_metric)
+        self.loss_2 = EpochValueProcessor(f'{name}_2', mode, report_per_batch, report_final, log_metric)
+        self.loss_weighted = EpochValueProcessor(f'{name}_weighted', mode, report_per_batch, report_final, log_metric)
+        
+    def __call__(self, loss, batch_size, step):
+
+        l1,l2,l_w = loss['loss_1'], loss['loss_2'], loss['loss_weighted']
+
+        l1 = self.loss_1(l1, batch_size, step)
+        l2 = self.loss_2(l2, batch_size, step)
+        l_w = self.loss_weighted(l_w, batch_size, step)
+
+        return l_w
+    
+    def finalize(self, step):
+        self.loss_1.finalize(step)
+        self.loss_2.finalize(step)
+        return self.loss_weighted.finalize(step)
+    
 
 
 class CERProcessor:
